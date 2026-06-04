@@ -1,8 +1,5 @@
-<<<<<<< HEAD
-fastapi
-uvicorn
-=======
-fastapi
-uvicorn
->>>>>>> fcfef4a18c3a4813d302a3bce133cf58882246bc
+streamlit
+pandas
+opencv-python-headless
+geopy
 sqlalchemy
