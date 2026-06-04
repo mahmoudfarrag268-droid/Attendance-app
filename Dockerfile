@@ -1,12 +1,20 @@
-<<<<<<< HEAD
 FROM python:3.10-slim
+
 WORKDIR /app
-COPY . /app
+
+# تثبيت التحديثات والأدوات الأساسية التي قد تحتاجها بعض المكتبات مثل opencv
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# نسخ ملف المتطلبات أولاً لتسريع البناء
+COPY requirements.txt .
+
+# تثبيت مكتبات بايثون
 RUN pip install --no-cache-dir -r requirements.txt
-=======
-FROM python:3.10-slim
-WORKDIR /app
-COPY . /app
-RUN pip install --no-cache-dir -r requirements.txt
->>>>>>> fcfef4a18c3a4813d302a3bce133cf58882246bc
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "10000"]
+
+# نسخ باقي ملفات المشروع إلى السيرفر
+COPY . .
+
+# تشغيل تطبيق FastAPI باستخدام uvicorn على المنفذ 7860 (المنفذ الافتراضي لـ Hugging Face)
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860"]
