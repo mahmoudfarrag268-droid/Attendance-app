@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.responses import HTMLResponse
+from fastapi.middleware.cors import CORSMiddleware  # استيراد مكتبة الحماية
 from sqlalchemy.orm import Session
 import models
 from database import engine, SessionLocal
@@ -10,6 +11,15 @@ from datetime import datetime, time
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
+
+# تفعيل الـ CORS للسماح للموبايل والمتصفحات بالاتصال بدون قيود حماية
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # السماح لجميع النطاقات
+    allow_credentials=True,
+    allow_methods=["*"],  # السماح لجميع العمليات (POST, GET, etc.)
+    allow_headers=["*"],
+)
 
 def get_db():
     db = SessionLocal()
@@ -48,7 +58,7 @@ def add_employee(employee_id: str, name: str, department: str, work_lat: float, 
 def record_attendance(employee_id: str, action_type: str, lat: float, lng: float, db: Session = Depends(get_db)):
     employee = db.query(models.Employee).filter(models.Employee.employee_id == employee_id).first()
     if not employee:
-        raise HTTPException(status_code=404, detail="هذا الموظف غير مسجل في النظام!")
+        raise HTTPException(status_code=404, detail="هذا الرقم الوظيفي غير مسجل في النظام!")
     
     if employee.work_lat is None or employee.work_lng is None:
         raise HTTPException(status_code=400, detail="لم يتم تحديد موقع عمل مخصص لهذا الموظف!")
@@ -119,15 +129,16 @@ def employee_interface():
                     const lat = position.coords.latitude;
                     const lng = position.coords.longitude;
                     
-                    // التعديل الجوهري لربط مسار السيرفر بشكل كامل ومباشر:
-                    const baseUrl = window.location.origin;
-                    const url = `${baseUrl}/record-attendance/?employee_id=${empId}&action_type=${action}&lat=${lat}&lng=${lng}`;
+                    // استخدام مسار مباشر وقصير يتخطى مشاكل الـ iframe
+                    const url = `/record-attendance/?employee_id=${empId}&action_type=${action}&lat=${lat}&lng=${lng}`;
                     
-                    fetch(url, { method: 'POST' })
+                    fetch(url, { 
+                        method: 'POST',
+                        headers: { 'Accept': 'application/json' }
+                    })
                     .then(async res => {
                         const data = await res.json();
                         if (!res.ok) {
-                            // عرض تفاصيل الخطأ القادم من FastAPI مباشرة (مثل: الموظف غير مسجل أو خارج النطاق)
                             throw new Error(data.detail || 'حدث خطأ في السيرفر');
                         }
                         return data;
@@ -136,7 +147,7 @@ def employee_interface():
                         alert('نجاح: ' + data.message);
                     })
                     .catch(err => {
-                        alert(err.message);
+                        alert('تنبيه: ' + err.message);
                     });
                 }, function(err) {
                     alert('برجاء تفعيل الـ GPS وصلاحية الموقع في المتصفح لتتمكن من تسجيل الحضور!');
