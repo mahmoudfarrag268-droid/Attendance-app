@@ -7,9 +7,13 @@ import models
 from database import engine, SessionLocal
 import math 
 from datetime import datetime
+import traceback  # لاستخراج تفاصيل الخطأ بدقة
 
 # إنشاء الجداول عند بدء التشغيل
-models.Base.metadata.create_all(bind=engine)
+try:
+    models.Base.metadata.create_all(bind=engine)
+except Exception as e:
+    print(f"Database Creation Error: {str(e)}")
 
 app = FastAPI()
 
@@ -65,36 +69,32 @@ def add_employee(employee_id: str, name: str, department: str, work_lat: float, 
 
 @app.post("/record-attendance/")
 def record_attendance(data: AttendanceRequest, db: Session = Depends(get_db)):
-    # جلب بيانات الموظف
-    employee = db.query(models.Employee).filter(models.Employee.employee_id == data.employee_id).first()
-    if not employee:
-        raise HTTPException(status_code=404, detail="هذا الرقم الوظيفي غير مسجل في النظام!")
-    
-    if employee.work_lat is None or employee.work_lng is None:
-        raise HTTPException(status_code=400, detail="لم يتم تحديد موقع عمل مخصص لهذا الموظف!")
-    
-    # حساب المسافة النطاقية
-    ALLOWED_RADIUS = 200 
-    distance = calculate_distance(data.lat, data.lng, employee.work_lat, employee.work_lng)
-    
-    if distance > ALLOWED_RADIUS:
-        raise HTTPException(
-            status_code=400, 
-            detail=f"أنت خارج النطاق. المسافة الحالية: {round(distance)} متر، والمسموح به: {ALLOWED_RADIUS} متر."
-        )
-    
-    # حساب دقائق التأخير بطريقة رياضية آمنة تمنع عطل السيرفر
-    delay = 0
-    if data.action_type == "دخول":
-        now = datetime.now()
-        # تحويل الوقت الحالي إلى دقائق منذ بدء اليوم
-        current_minutes = now.hour * 60 + now.minute
-        work_start_minutes = 9 * 60  # الساعة 9 صباحاً تعني 540 دقيقة
-        
-        if current_minutes > work_start_minutes:
-            delay = current_minutes - work_start_minutes
-
     try:
+        # 1. التحقق من الموظف في قاعدة البيانات
+        employee = db.query(models.Employee).filter(models.Employee.employee_id == data.employee_id).first()
+        if not employee:
+            return {"status": "error", "message": "هذا الرقم الوظيفي غير مسجل في النظام!"}
+        
+        if employee.work_lat is None or employee.work_lng is None:
+            return {"status": "error", "message": "لم يتم تحديد موقع عمل مخصص لهذا الموظف!"}
+        
+        # 2. حساب المسافة
+        ALLOWED_RADIUS = 200 
+        distance = calculate_distance(data.lat, data.lng, employee.work_lat, employee.work_lng)
+        
+        if distance > ALLOWED_RADIUS:
+            return {"status": "error", "message": f"أنت خارج النطاق الجغرافي بـ {round(distance)} متر."}
+        
+        # 3. حساب التأخير
+        delay = 0
+        if data.action_type == "دخول":
+            now = datetime.now()
+            current_minutes = now.hour * 60 + now.minute
+            work_start_minutes = 9 * 60  
+            if current_minutes > work_start_minutes:
+                delay = current_minutes - work_start_minutes
+
+        # 4. حفظ السجل
         new_record = models.Attendance(
             employee_id=data.employee_id, 
             type=data.action_type, 
@@ -104,14 +104,17 @@ def record_attendance(data: AttendanceRequest, db: Session = Depends(get_db)):
         )
         db.add(new_record)
         db.commit()
+        
+        msg = f"تم تسجيل {data.action_type} بنجاح!"
+        if delay > 0:
+            msg += f" (تأخير {delay} دقيقة)"
+        return {"status": "success", "message": msg}
+
     except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail="فشل في حفظ البيانات بقاعدة البيانات")
-    
-    msg = f"تم تسجيل {data.action_type} بنجاح!"
-    if delay > 0:
-        msg += f" (تأخير {delay} دقيقة)"
-    return {"status": "success", "message": msg}
+        # التقاط أي خطأ خفي وإرساله كـ نص واضح بدلاً من انهيار السيرفر
+        error_details = traceback.format_exc()
+        print(error_details)  # ستظهر في الـ Logs الخاصة بالمنصة
+        return {"status": "server_crash", "message": f"عطل داخلي في السيرفر: {str(e)}"}
 
 @app.get("/", response_class=HTMLResponse)
 def employee_interface():
@@ -150,15 +153,11 @@ def employee_interface():
                     const lat = position.coords.latitude;
                     const lng = position.coords.longitude;
                     
-                    // استخدام مسار كامل وديناميكي متوافق مع بروتوكولات الحماية
                     const url = window.location.origin + "/record-attendance/";
                     
                     fetch(url, { 
                         method: 'POST',
-                        headers: { 
-                            'Content-Type': 'application/json',
-                            'Accept': 'application/json'
-                        },
+                        headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             employee_id: empId,
                             action_type: action,
@@ -166,18 +165,13 @@ def employee_interface():
                             lng: parseFloat(lng)
                         })
                     })
-                    .then(async res => {
-                        const data = await res.json();
-                        if (!res.ok) {
-                            throw new Error(data.detail || 'خطأ في معالجة البيانات');
-                        }
-                        return data;
-                    })
+                    .then(res => res.json())
                     .then(data => {
-                        alert('نجاح: ' + data.message);
+                        // عرض الرسالة القادمة من السيرفر مباشرة سواء كانت نجاح أو تفاصيل العطل
+                        alert(data.message);
                     })
                     .catch(err => {
-                        alert('تنبيه من السيرفر: ' + err.message);
+                        alert('خطأ في الاتصال بالشبكة: ' + err.message);
                     });
                 }, function(err) {
                     alert('برجاء تفعيل الـ GPS وصلاحية الموقع في المتصفح لتتمكن من تسجيل الحضور!');
