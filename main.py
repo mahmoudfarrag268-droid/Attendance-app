@@ -9,7 +9,6 @@ from datetime import datetime, time
 # إنشاء الجداول في قاعدة البيانات عند بدء التشغيل
 models.Base.metadata.create_all(bind=engine)
 
-# السطر الحاسم الذي يبحث عنه السيرفر:
 app = FastAPI()
 
 def get_db():
@@ -49,7 +48,7 @@ def add_employee(employee_id: str, name: str, department: str, work_lat: float, 
 def record_attendance(employee_id: str, action_type: str, lat: float, lng: float, db: Session = Depends(get_db)):
     employee = db.query(models.Employee).filter(models.Employee.employee_id == employee_id).first()
     if not employee:
-        raise HTTPException(status_code=404, detail="هذا الموظف غير مسجل!")
+        raise HTTPException(status_code=404, detail="هذا الموظف غير مسجل في النظام!")
     
     if employee.work_lat is None or employee.work_lng is None:
         raise HTTPException(status_code=400, detail="لم يتم تحديد موقع عمل مخصص لهذا الموظف!")
@@ -60,7 +59,7 @@ def record_attendance(employee_id: str, action_type: str, lat: float, lng: float
     if distance > ALLOWED_RADIUS:
         raise HTTPException(
             status_code=400, 
-            detail=f"فشل الحضور: أنت خارج النطاق. المسافة: {round(distance)} متر، والمسموح {ALLOWED_RADIUS} متر."
+            detail=f"أنت خارج النطاق المسموح. المسافة الحالية: {round(distance)} متر، والمسموح به: {ALLOWED_RADIUS} متر."
         )
     
     delay = 0
@@ -120,16 +119,27 @@ def employee_interface():
                     const lat = position.coords.latitude;
                     const lng = position.coords.longitude;
                     
-                    const url = `/record-attendance/?employee_id=${empId}&action_type=${action}&lat=${lat}&lng=${lng}`;
+                    // التعديل الجوهري لربط مسار السيرفر بشكل كامل ومباشر:
+                    const baseUrl = window.location.origin;
+                    const url = `${baseUrl}/record-attendance/?employee_id=${empId}&action_type=${action}&lat=${lat}&lng=${lng}`;
+                    
                     fetch(url, { method: 'POST' })
-                    .then(res => res.json())
-                    .then(data => {
-                        if(data.detail) { alert('فشل: ' + data.detail); }
-                        else { alert('نجاح: ' + data.message); }
+                    .then(async res => {
+                        const data = await res.json();
+                        if (!res.ok) {
+                            // عرض تفاصيل الخطأ القادم من FastAPI مباشرة (مثل: الموظف غير مسجل أو خارج النطاق)
+                            throw new Error(data.detail || 'حدث خطأ في السيرفر');
+                        }
+                        return data;
                     })
-                    .catch(err => alert('خطأ في الاتصال بالسيرفر'));
+                    .then(data => {
+                        alert('نجاح: ' + data.message);
+                    })
+                    .catch(err => {
+                        alert(err.message);
+                    });
                 }, function(err) {
-                    alert('برجاء تفعيل الـ GPS في هاتفك لتتمكن من تسجيل الحضور!');
+                    alert('برجاء تفعيل الـ GPS وصلاحية الموقع في المتصفح لتتمكن من تسجيل الحضور!');
                 });
             }
         </script>
