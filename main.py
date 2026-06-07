@@ -21,7 +21,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# نموذج استقبال البيانات لضمان عدم حدوث خطأ داخلي في السيرفر
 class AttendanceRequest(BaseModel):
     employee_id: str
     action_type: str
@@ -44,7 +43,7 @@ def calculate_distance(lat1, lon1, lat2, lon2):
         c = 2 * math.asin(math.sqrt(a))
         return c * 6371000
     except Exception:
-        return 999999  # في حال فشل الحساب المتر يخرج خارج النطاق تلقائياً
+        return 999999
 
 @app.get("/attendance-report/")
 def get_attendance_report(db: Session = Depends(get_db)):
@@ -139,7 +138,8 @@ def employee_interface():
                     const lat = position.coords.latitude;
                     const lng = position.coords.longitude;
                     
-                    const url = window.location.origin + `/record-attendance/`;
+                    // استخدام مسار محلي مباشر يبدأ بنقطة، ليعرف المتصفح أنه يتحرك داخل نفس الـ Space ونفس البروتوكول تلقائياً
+                    const url = "./record-attendance/";
                     
                     fetch(url, { 
                         method: 'POST',
@@ -154,7 +154,7 @@ def employee_interface():
                     .then(async res => {
                         const data = await res.json();
                         if (!res.ok) {
-                            throw new Error(data.detail || 'حدث خطأ غير متوقع');
+                            throw new Error(data.detail || 'حدث خطأ في السيرفر');
                         }
                         return data;
                     })
