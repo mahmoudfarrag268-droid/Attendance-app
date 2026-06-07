@@ -6,9 +6,9 @@ from pydantic import BaseModel
 import models
 from database import engine, SessionLocal
 import math 
-from datetime import datetime, time
+from datetime import datetime
 
-# إنشاء الجداول
+# إنشاء الجداول عند بدء التشغيل
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
@@ -65,6 +65,7 @@ def add_employee(employee_id: str, name: str, department: str, work_lat: float, 
 
 @app.post("/record-attendance/")
 def record_attendance(data: AttendanceRequest, db: Session = Depends(get_db)):
+    # جلب بيانات الموظف
     employee = db.query(models.Employee).filter(models.Employee.employee_id == data.employee_id).first()
     if not employee:
         raise HTTPException(status_code=404, detail="هذا الرقم الوظيفي غير مسجل في النظام!")
@@ -72,29 +73,40 @@ def record_attendance(data: AttendanceRequest, db: Session = Depends(get_db)):
     if employee.work_lat is None or employee.work_lng is None:
         raise HTTPException(status_code=400, detail="لم يتم تحديد موقع عمل مخصص لهذا الموظف!")
     
+    # حساب المسافة النطاقية
     ALLOWED_RADIUS = 200 
     distance = calculate_distance(data.lat, data.lng, employee.work_lat, employee.work_lng)
     
     if distance > ALLOWED_RADIUS:
         raise HTTPException(
             status_code=400, 
-            detail=f"أنت خارج النطاق. المسافة: {round(distance)} متر، والمسموح: {ALLOWED_RADIUS} متر."
+            detail=f"أنت خارج النطاق. المسافة الحالية: {round(distance)} متر، والمسموح به: {ALLOWED_RADIUS} متر."
         )
     
+    # حساب دقائق التأخير بطريقة رياضية آمنة تمنع عطل السيرفر
     delay = 0
     if data.action_type == "دخول":
-        current_time = datetime.now().time()
-        work_start_time = time(9, 0)
-        if current_time > work_start_time:
-            full_date_1 = datetime.combine(datetime.today(), current_time)
-            full_date_2 = datetime.combine(datetime.today(), work_start_time)
-            delay = int((full_date_1 - full_date_2).total_seconds() / 60)
+        now = datetime.now()
+        # تحويل الوقت الحالي إلى دقائق منذ بدء اليوم
+        current_minutes = now.hour * 60 + now.minute
+        work_start_minutes = 9 * 60  # الساعة 9 صباحاً تعني 540 دقيقة
+        
+        if current_minutes > work_start_minutes:
+            delay = current_minutes - work_start_minutes
 
-    new_record = models.Attendance(
-        employee_id=data.employee_id, type=data.action_type, latitude=data.lat, longitude=data.lng, delay_minutes=delay
-    )
-    db.add(new_record)
-    db.commit()
+    try:
+        new_record = models.Attendance(
+            employee_id=data.employee_id, 
+            type=data.action_type, 
+            latitude=float(data.lat), 
+            longitude=float(data.lng), 
+            delay_minutes=int(delay)
+        )
+        db.add(new_record)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="فشل في حفظ البيانات بقاعدة البيانات")
     
     msg = f"تم تسجيل {data.action_type} بنجاح!"
     if delay > 0:
@@ -138,12 +150,15 @@ def employee_interface():
                     const lat = position.coords.latitude;
                     const lng = position.coords.longitude;
                     
-                    // استخدام مسار محلي مباشر يبدأ بنقطة، ليعرف المتصفح أنه يتحرك داخل نفس الـ Space ونفس البروتوكول تلقائياً
-                    const url = "./record-attendance/";
+                    // استخدام مسار كامل وديناميكي متوافق مع بروتوكولات الحماية
+                    const url = window.location.origin + "/record-attendance/";
                     
                     fetch(url, { 
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: { 
+                            'Content-Type': 'application/json',
+                            'Accept': 'application/json'
+                        },
                         body: JSON.stringify({
                             employee_id: empId,
                             action_type: action,
@@ -154,7 +169,7 @@ def employee_interface():
                     .then(async res => {
                         const data = await res.json();
                         if (!res.ok) {
-                            throw new Error(data.detail || 'حدث خطأ في السيرفر');
+                            throw new Error(data.detail || 'خطأ في معالجة البيانات');
                         }
                         return data;
                     })
@@ -162,7 +177,7 @@ def employee_interface():
                         alert('نجاح: ' + data.message);
                     })
                     .catch(err => {
-                        alert('تنبيه: ' + err.message);
+                        alert('تنبيه من السيرفر: ' + err.message);
                     });
                 }, function(err) {
                     alert('برجاء تفعيل الـ GPS وصلاحية الموقع في المتصفح لتتمكن من تسجيل الحضور!');
