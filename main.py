@@ -1,25 +1,32 @@
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.responses import HTMLResponse
-from fastapi.middleware.cors import CORSMiddleware  # استيراد مكتبة الحماية
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
+from pydantic import BaseModel
 import models
 from database import engine, SessionLocal
 import math 
 from datetime import datetime, time
 
-# إنشاء الجداول في قاعدة البيانات عند بدء التشغيل
+# إنشاء الجداول
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 
-# تفعيل الـ CORS للسماح للموبايل والمتصفحات بالاتصال بدون قيود حماية
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # السماح لجميع النطاقات
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  # السماح لجميع العمليات (POST, GET, etc.)
+    allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# نموذج استقبال البيانات لضمان عدم حدوث خطأ داخلي في السيرفر
+class AttendanceRequest(BaseModel):
+    employee_id: str
+    action_type: str
+    lat: float
+    lng: float
 
 def get_db():
     db = SessionLocal()
@@ -29,12 +36,15 @@ def get_db():
         db.close()
 
 def calculate_distance(lat1, lon1, lat2, lon2):
-    lat1, lon1, lat2, lon2 = map(math.radians, [float(lat1), float(lon1), float(lat2), float(lon2)])
-    dlat = lat2 - lat1
-    dlon = lon2 - lon1
-    a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
-    c = 2 * math.asin(math.sqrt(a))
-    return c * 6371000
+    try:
+        lat1, lon1, lat2, lon2 = map(math.radians, [float(lat1), float(lon1), float(lat2), float(lon2)])
+        dlat = lat2 - lat1
+        dlon = lon2 - lon1
+        a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+        c = 2 * math.asin(math.sqrt(a))
+        return c * 6371000
+    except Exception:
+        return 999999  # في حال فشل الحساب المتر يخرج خارج النطاق تلقائياً
 
 @app.get("/attendance-report/")
 def get_attendance_report(db: Session = Depends(get_db)):
@@ -55,8 +65,8 @@ def add_employee(employee_id: str, name: str, department: str, work_lat: float, 
     return {"status": "success", "message": f"تم تسجيل الموظف {name} بنجاح!"}
 
 @app.post("/record-attendance/")
-def record_attendance(employee_id: str, action_type: str, lat: float, lng: float, db: Session = Depends(get_db)):
-    employee = db.query(models.Employee).filter(models.Employee.employee_id == employee_id).first()
+def record_attendance(data: AttendanceRequest, db: Session = Depends(get_db)):
+    employee = db.query(models.Employee).filter(models.Employee.employee_id == data.employee_id).first()
     if not employee:
         raise HTTPException(status_code=404, detail="هذا الرقم الوظيفي غير مسجل في النظام!")
     
@@ -64,16 +74,16 @@ def record_attendance(employee_id: str, action_type: str, lat: float, lng: float
         raise HTTPException(status_code=400, detail="لم يتم تحديد موقع عمل مخصص لهذا الموظف!")
     
     ALLOWED_RADIUS = 200 
-    distance = calculate_distance(lat, lng, employee.work_lat, employee.work_lng)
+    distance = calculate_distance(data.lat, data.lng, employee.work_lat, employee.work_lng)
     
     if distance > ALLOWED_RADIUS:
         raise HTTPException(
             status_code=400, 
-            detail=f"أنت خارج النطاق المسموح. المسافة الحالية: {round(distance)} متر، والمسموح به: {ALLOWED_RADIUS} متر."
+            detail=f"أنت خارج النطاق. المسافة: {round(distance)} متر، والمسموح: {ALLOWED_RADIUS} متر."
         )
     
     delay = 0
-    if action_type == "دخول":
+    if data.action_type == "دخول":
         current_time = datetime.now().time()
         work_start_time = time(9, 0)
         if current_time > work_start_time:
@@ -82,12 +92,12 @@ def record_attendance(employee_id: str, action_type: str, lat: float, lng: float
             delay = int((full_date_1 - full_date_2).total_seconds() / 60)
 
     new_record = models.Attendance(
-        employee_id=employee_id, type=action_type, latitude=lat, longitude=lng, delay_minutes=delay
+        employee_id=data.employee_id, type=data.action_type, latitude=data.lat, longitude=data.lng, delay_minutes=delay
     )
     db.add(new_record)
     db.commit()
     
-    msg = f"تم تسجيل {action_type} بنجاح!"
+    msg = f"تم تسجيل {data.action_type} بنجاح!"
     if delay > 0:
         msg += f" (تأخير {delay} دقيقة)"
     return {"status": "success", "message": msg}
@@ -129,17 +139,22 @@ def employee_interface():
                     const lat = position.coords.latitude;
                     const lng = position.coords.longitude;
                     
-                    // استخدام مسار مباشر وقصير يتخطى مشاكل الـ iframe
-                    const url = `/record-attendance/?employee_id=${empId}&action_type=${action}&lat=${lat}&lng=${lng}`;
+                    const url = window.location.origin + `/record-attendance/`;
                     
                     fetch(url, { 
                         method: 'POST',
-                        headers: { 'Accept': 'application/json' }
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            employee_id: empId,
+                            action_type: action,
+                            lat: parseFloat(lat),
+                            lng: parseFloat(lng)
+                        })
                     })
                     .then(async res => {
                         const data = await res.json();
                         if (!res.ok) {
-                            throw new Error(data.detail || 'حدث خطأ في السيرفر');
+                            throw new Error(data.detail || 'حدث خطأ غير متوقع');
                         }
                         return data;
                     })
