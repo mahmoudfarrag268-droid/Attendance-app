@@ -7,9 +7,19 @@ import models
 from database import engine, SessionLocal
 import math 
 from datetime import datetime
-import traceback  # لاستخراج تفاصيل الخطأ بدقة
+import traceback
+import os  # استيراد مكتبة النظام لحذف الملف المتعارض
 
-# إنشاء الجداول عند بدء التشغيل
+# كود حذف قاعدة البيانات القديمة لإعادة بنائها بالأعمدة الجديدة تلقائياً
+db_filename = "sql_app.db"  # تأكد من اسم ملف قاعدة البيانات لديك، إذا كان مختلفاً قم بتغييره هنا
+if os.path.exists(db_filename):
+    try:
+        os.remove(db_filename)
+        print("تم حذف قاعدة البيانات القديمة بنجاح لإعادة التحديث.")
+    except Exception as e:
+        print(f"لم نتمكن من حذف الملف يدوياً: {str(e)}")
+
+# إنشاء الجداول بالهيكل الجديد بالكامل (بما فيها work_lat و work_lng)
 try:
     models.Base.metadata.create_all(bind=engine)
 except Exception as e:
